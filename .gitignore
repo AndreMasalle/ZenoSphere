@@ -1,0 +1,53 @@
+# ==================================
+# 1. Python / Backend
+# ==================================
+*env*
+__pycache__/
+*xml*
+*idea*
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+
+# File Environment
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+
+# File Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ==================================
+# 2. Node.js / Frontend (React/Vite)
+# ==================================
+node_modules/
+dist/
+dist-ssr/
+build/
+.vite/
+
+# File Log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==================================
+# 3. IDE (DataSpell / VS Code)
+# ==================================
+.idea/
+.vscode/
+*.iml
+
+# ==================================
+# 4. Sistem Operasi (OS)
+# ==================================
+Thumbs.db
+Desktop.ini
+.DS_Store
