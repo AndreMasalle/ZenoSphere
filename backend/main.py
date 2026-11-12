@@ -169,11 +169,18 @@ def delete_task(task_id: int, session: Session = Depends(get_session)):
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Tugas tidak ditemukan")
+
+    # Hapus dari database terlebih dahulu
     session.delete(task)
     session.commit()
-    delete_gcal_event(task_id)
-    return {"status": "success", "message": "Tugas berhasil dihapus"}
 
+    # Coba hapus dari GCal, tapi jangan sampai mengganggu proses hapus di DB
+    try:
+        delete_gcal_event(task_id)
+    except Exception as e:
+        print(f"Peringatan: Gagal hapus di GCal, tapi DB sudah bersih. Error: {e}")
+
+    return {"status": "success", "message": "Tugas berhasil dihapus"}
 
 @app.get("/api/schedule")
 def get_upcoming_schedule(session: Session = Depends(get_session)):

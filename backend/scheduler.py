@@ -19,10 +19,20 @@ def generate_schedule(tasks: List[Task]) -> dict:
     now = datetime.now(timezone.utc)
     local_tz = timezone(timedelta(hours=7))
 
-    sorted_valid = sorted(valid_tasks, key=lambda x: x.start_time if x.start_time else now + timedelta(days=999))
-    schedule_blocks = []
+    # PENGURUTAN MULTI-LEVEL (Netral):
+    # 1. Skor Prioritas (Tertinggi ke Terendah)
+    # 2. Waktu Mulai (Paling awal ke paling akhir)
+    # 3. ID (Inputan yang lebih dulu)
+    sorted_valid = sorted(
+        valid_tasks,
+        key=lambda x: (
+            -calculate_priority_score(x),
+            x.start_time if x.start_time else now + timedelta(days=999),
+            x.id
+        )
+    )
 
-    # Menyimpan jadwal yang sudah ditempatkan untuk deteksi konflik
+    schedule_blocks = []
     occupied_slots = []
 
     for task in sorted_valid:
@@ -40,18 +50,18 @@ def generate_schedule(tasks: List[Task]) -> dict:
             start_loc = current_start.astimezone(local_tz)
             end_loc = current_end.astimezone(local_tz)
 
-            # DETEKSI BENTROK (Hanya mendeteksi, tidak menggeser)
+            # DETEKSI BENTROK
             has_conflict = False
             conflict_with = None
             for occ_start, occ_end, occ_title in occupied_slots:
                 occ_start_loc = occ_start.astimezone(local_tz)
                 occ_end_loc = occ_end.astimezone(local_tz)
+
                 if start_loc < occ_end_loc and end_loc > occ_start_loc:
                     has_conflict = True
                     conflict_with = occ_title
                     break
 
-            # Catat jadwal ke occupied_slots
             occupied_slots.append((current_start, current_end, task.title))
 
             title_suffix = f" (Sesi {session_count})" if task.estimated_min > max_session else ""

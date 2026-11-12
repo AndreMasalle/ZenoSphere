@@ -41,7 +41,6 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [rulesText, setRulesText] = useState('');
 
-  // State untuk Modal Reschedule
   const [rescheduleTaskId, setRescheduleTaskId] = useState<number | null>(null);
   const [newStartTime, setNewStartTime] = useState('');
 
@@ -143,8 +142,16 @@ function App() {
 
   const handleDeleteTask = async (taskId: number) => {
     if (!confirm('Hapus jadwal ini?')) return;
-    await fetch(`http://localhost:8000/api/tasks/${taskId}`, { method: 'DELETE' });
-    await fetchSchedule();
+    try {
+      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || 'Gagal menghapus tugas dari server');
+      }
+      await fetchSchedule();
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    }
   };
 
   const handleReschedule = async (e: React.FormEvent) => {
@@ -163,8 +170,8 @@ function App() {
       setRescheduleTaskId(null);
       setNewStartTime('');
       await fetchSchedule();
-    } catch (err) {
-      alert('Gagal mengubah jadwal');
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
     }
   };
 
@@ -291,7 +298,8 @@ function App() {
               <h3 className="text-lg font-bold text-gray-700 mb-3 border-b pb-2">{date}</h3>
               <div className="space-y-4">
                 {tasks.map((block) => (
-                  <div key={block.task_id} className={`relative flex flex-col md:flex-row md:items-center p-4 pt-10 md:pt-4 border rounded-lg hover:shadow-sm gap-4 ${block.has_conflict ? 'bg-red-50 border-red-400' : 'bg-gray-50 border-gray-200'}`}>
+                  // PERBAIKAN REACT KEY: Gunakan gabungan task_id dan start_time
+                  <div key={`${block.task_id}-${block.start_time}`} className={`relative flex flex-col md:flex-row md:items-center p-4 pt-10 md:pt-4 border rounded-lg hover:shadow-sm gap-4 ${block.has_conflict ? 'bg-red-50 border-red-400' : 'bg-gray-50 border-gray-200'}`}>
                     <div className="absolute top-3 right-3 md:top-4 md:right-4">
                       <span className={`text-xs font-bold px-3 py-1 rounded-full ${block.importance >= 4 ? 'bg-red-100 text-red-700' : block.importance === 3 ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>
                         Priority: {block.importance}
@@ -319,7 +327,6 @@ function App() {
                     </div>
                     <div className="md:w-3/6 flex flex-col gap-3">
 
-                      {/* KOTAK BENTROK & TOMBOL UBAH JADWAL */}
                       {block.has_conflict && (
                         <div className="bg-red-100 text-red-700 p-3 rounded border border-red-300 text-sm font-semibold flex justify-between items-center">
                           <span>⚠️ Bentrok dengan: {block.conflict_with}</span>
@@ -372,7 +379,6 @@ function App() {
         </div>
       )}
 
-      {/* Modal Pengaturan AI */}
       {showSettings && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
@@ -386,7 +392,6 @@ function App() {
         </div>
       )}
 
-      {/* Modal Reschedule Manual */}
       {rescheduleTaskId && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
