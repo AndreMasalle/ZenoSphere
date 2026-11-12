@@ -31,9 +31,7 @@ def analyze_task(title: str, description: str, user_context: str, new_start_time
     2. "importance": 1-5 berdasarkan konteks.
     3. "reason": Alasan prioritas berdasarkan konteks.
     4. "warning": Penjelasan singkat mengapa ini bentrok/distraksi. Jika aman, isi "".
-    5. "action": Pilih satu aksi:
-       - "block": Jika tugas baru ini murni distraksi (main game 20 jam).
-       - "keep": Jika tugas ini valid (termasuk appointment penting).
+    5. "action": Pilih satu aksi: "block" (jika distraksi), atau "keep" (jika valid).
     6. "preferred_period": "morning", "afternoon", "evening", atau "any".
     7. "max_session_min": Default 90.
     8. "break_min": Default 15.
@@ -70,27 +68,16 @@ def analyze_task(title: str, description: str, user_context: str, new_start_time
 
 
 def choose_best_slot(task_title: str, task_duration: int, slots: list, user_context: str) -> dict:
-    """Meminta LLM untuk memilih slot terbaik dari daftar yang diberikan."""
     slots_text = "\n".join([f"{i + 1}. {slot['label']}" for i, slot in enumerate(slots)])
-
     prompt = f"""
     Pengguna ingin memindahkan jadwal "{task_title}" (durasi {task_duration} menit) yang sebelumnya bentrok.
-
-    KONTEKS PENGGUNA:
-    "{user_context}"
-
+    KONTEKS PENGGUNA: "{user_context}"
     Berikut adalah 3 slot waktu kosong terdekat yang tersedia:
     {slots_text}
 
     Tugas: Pilih SATU slot terbaik dari daftar di atas dan berikan alasan logis mengapa slot tersebut dipilih berdasarkan konteks pengguna.
-
-    Kembalikan HANYA JSON:
-    {{
-        "chosen_index": 1, (isi dengan angka 1, 2, atau 3 sesuai pilihan)
-        "reason": "Alasan mengapa memilih slot ini..."
-    }}
+    Kembalikan HANYA JSON: {{"chosen_index": 1, "reason": "..."}}
     """
-
     messages_data = [
         {"role": "system", "content": "You are an intelligent scheduling assistant designed to output JSON."},
         {"role": "user", "content": prompt}
@@ -107,3 +94,41 @@ def choose_best_slot(task_title: str, task_duration: int, slots: list, user_cont
     except Exception as e:
         print(f"Error LLM (choose slot): {e}")
         return {"chosen_index": 1, "reason": "Gagal mendapatkan saran dari AI. Silakan pilih secara manual."}
+
+
+def generate_weekly_review(stats_text: str, user_context: str) -> str:
+    """Menghasilkan ulasan mingguan berdasarkan data statistik dan konteks pengguna."""
+    prompt = f"""
+    Anda adalah seorang mentor produktivitas dan work-life balance.
+
+    KONTEKS PREFERENSI:
+    "{user_context}"
+
+    DATA STATISTIK MINGGU INI:
+    {stats_text}
+
+    Tugas: Berikan ulasan yang terdiri dari 2 paragraf.
+    - Paragraf 1: Evaluasi keseimbangan hidup berdasarkan data (apakah santai berlebih, olahraga kurang, dll).
+    - Paragraf 2: Satu saran actionable untuk minggu depan.
+
+    ATURAN FORMAT:
+    1. Gunakan **teks** (dua bintang) untuk menebalkan poin penting (seperti angka durasi atau saran utama).
+    2. Pisahkan antar paragraf dengan satu karakter baris baru (Enter).
+    3. Gunakan bahasa yang ramah dan personal (boleh menggunakan kata "kamu").
+    """
+
+    messages_data = [
+        {"role": "system", "content": "You are a helpful productivity mentor. Output text with markdown bolding."},
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=cast(list[ChatCompletionMessageParam], messages_data),
+            temperature=0.5
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Error LLM (weekly review): {e}")
+        return "Gagal menghasilkan ulasan AI saat ini. Tetap semangat dan jaga keseimbangan hidup."

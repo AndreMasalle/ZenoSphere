@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import './App.css'
 import {
   ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell, ReferenceLine, ReferenceArea
+  ResponsiveContainer, Cell, ReferenceLine, ReferenceArea,
+  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  BarChart, Bar
 } from 'recharts'
 
 interface ScheduleBlock {
@@ -38,15 +40,23 @@ interface MatrixTask {
   duration: number;
 }
 
+interface AnalyticsData {
+  radar_data: { subject: string; A: number; fullMark: number }[];
+  daily_data: { day: string; minutes: number }[];
+  ai_review: string;
+  total_done: number;
+  total_pending: number;
+}
+
 function App() {
-  const [activeTab, setActiveTab] = useState<'schedule' | 'matrix'>('schedule');
+  const [activeTab, setActiveTab] = useState<'schedule' | 'matrix' | 'analytics'>('schedule');
   const [schedule, setSchedule] = useState<ScheduleBlock[]>([]);
   const [matrixData, setMatrixData] = useState<MatrixTask[]>([]);
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
   const [warnedTasks, setWarnedTasks] = useState<ScheduleBlock[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // State Form Tambah
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [itemType, setItemType] = useState<'event' | 'task' | 'appointment'>('task');
@@ -57,7 +67,6 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // State Modal Edit Manual
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -69,7 +78,6 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [editError, setEditError] = useState('');
 
-  // State Smart Reschedule
   const [rescheduleData, setRescheduleData] = useState<any>(null);
   const [isSuggesting, setIsSuggesting] = useState(false);
 
@@ -81,16 +89,21 @@ function App() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [scheduleRes, matrixRes] = await Promise.all([
+      const [scheduleRes, matrixRes, analyticsRes] = await Promise.all([
         fetch('http://localhost:8000/api/schedule'),
-        fetch('http://localhost:8000/api/matrix')
+        fetch('http://localhost:8000/api/matrix'),
+        fetch('http://localhost:8000/api/analytics')
       ]);
-      if (!scheduleRes.ok || !matrixRes.ok) throw new Error('Gagal mengambil data');
+      if (!scheduleRes.ok || !matrixRes.ok || !analyticsRes.ok) throw new Error('Gagal mengambil data');
+
       const scheduleData = await scheduleRes.json();
       const matrixData = await matrixRes.json();
+      const analyticsData = await analyticsRes.json();
+
       setSchedule(scheduleData.schedule_blocks || []);
       setWarnedTasks(scheduleData.warned_blocks || []);
       setMatrixData(matrixData.matrix || []);
+      setAnalyticsData(analyticsData);
       setError('');
     } catch (err) {
       setError('Gagal terhubung ke server backend.');
@@ -114,6 +127,7 @@ function App() {
       body: JSON.stringify({ rule_text: rulesText }),
     });
     setShowSettings(false);
+    fetchData();
   };
 
   const handleConnectGcal = async () => {
@@ -209,7 +223,6 @@ function App() {
     }
   };
 
-  // Fungsi Smart Reschedule
   const handleSmartReschedule = async (taskId: number) => {
     setIsSuggesting(true);
     setRescheduleData(null);
@@ -234,9 +247,6 @@ function App() {
         body: JSON.stringify({ new_start_time: rescheduleData.suggested_time_iso }),
       });
       if (!response.ok) throw new Error('Gagal memindahkan jadwal');
-
-      // Cari task_id dari judul di rescheduleData (karena API saran tidak mengembalikan ID asli)
-      // Sebenarnya lebih baik backend mengembalikan ID, tapi untuk aman kita refresh saja datanya
       setRescheduleData(null);
       await fetchData();
     } catch (err: any) {
@@ -279,6 +289,22 @@ function App() {
     if (item_type === 'event') return '#a855f7';
     if (item_type === 'appointment') return '#ec4899';
     return '#3b82f6';
+  };
+
+  // --- FUNGSI UNTUK MEMFORMAT TEKS MARKDOWN AI MENJADI PARAGRAF & BOLD ---
+  const formatReviewText = (text: string) => {
+    return text.split('\n').filter(p => p.trim() !== '').map((paragraph, i) => {
+      // Memisahkan teks berdasarkan tanda ** untuk mencari teks yang di-bold
+      const parts = paragraph.split('**');
+      return (
+        <p key={i} className="mb-4 last:mb-0 leading-relaxed text-gray-700">
+          {parts.map((part, index) =>
+            // Jika index ganjil, berarti itu adalah teks di antara ** dan ** (jadi di-bold)
+            index % 2 === 1 ? <strong key={index} className="text-gray-900 font-semibold">{part}</strong> : <span key={index}>{part}</span>
+          )}
+        </p>
+      );
+    });
   };
 
   const CustomTooltip = ({ active, payload }: any) => {
@@ -336,12 +362,13 @@ function App() {
 
       <div className="flex justify-center mb-6">
         <div className="bg-gray-200 p-1 rounded-lg inline-flex">
-          <button onClick={() => setActiveTab('schedule')} className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${activeTab === 'schedule' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-800'}`}>📅 Jadwal Mendatang</button>
-          <button onClick={() => setActiveTab('matrix')} className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${activeTab === 'matrix' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-800'}`}>🎯 Eisenhower Matrix</button>
+          <button onClick={() => setActiveTab('schedule')} className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${activeTab === 'schedule' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-800'}`}>📅 Jadwal</button>
+          <button onClick={() => setActiveTab('matrix')} className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${activeTab === 'matrix' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-800'}`}>🎯 Matrix</button>
+          <button onClick={() => setActiveTab('analytics')} className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${activeTab === 'analytics' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-800'}`}>📊 Review</button>
         </div>
       </div>
 
-      {activeTab === 'schedule' ? (
+      {activeTab === 'schedule' && (
         <div className="bg-white rounded-xl shadow-md p-6">
           <div className="flex justify-between items-center mb-6 border-b pb-4">
             <h2 className="text-2xl font-semibold text-gray-800">Daftar Jadwal (7 Hari)</h2>
@@ -368,16 +395,8 @@ function App() {
                       <div className="md:w-3/6 flex flex-col gap-3">
                         {block.has_conflict && (
                           <div className="bg-red-100 text-red-700 p-3 rounded border border-red-300 text-sm font-semibold flex flex-col gap-2">
-                            <div className="flex justify-between items-center">
-                              <span>⚠️ Bentrok dengan: {block.conflict_with}</span>
-                              <button onClick={() => openEditModal(block)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs shrink-0 ml-2">Ubah Manual</button>
-                            </div>
-                            <button
-                              onClick={() => handleSmartReschedule(block.task_id)}
-                              className="bg-purple-600 hover:bg-purple-700 text-white w-full py-1.5 rounded font-medium text-xs flex items-center justify-center gap-1"
-                            >
-                              ✨ Smart Reschedule (Saran AI)
-                            </button>
+                            <div className="flex justify-between items-center"><span>⚠️ Bentrok dengan: {block.conflict_with}</span><button onClick={() => openEditModal(block)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs shrink-0 ml-2">Ubah Manual</button></div>
+                            <button onClick={() => handleSmartReschedule(block.task_id)} className="bg-purple-600 hover:bg-purple-700 text-white w-full py-1.5 rounded font-medium text-xs flex items-center justify-center gap-1">✨ Smart Reschedule (Saran AI)</button>
                           </div>
                         )}
                         <div className="text-sm text-gray-600 italic bg-white p-2 rounded border">"{block.reason}"</div>
@@ -394,7 +413,9 @@ function App() {
             ))}
           </div>
         </div>
-      ) : (
+      )}
+
+      {activeTab === 'matrix' && (
         <div className="bg-white rounded-xl shadow-md p-6">
           <div className="mb-6 border-b pb-4"><h2 className="text-2xl font-semibold text-gray-800">Eisenhower Matrix</h2><p className="text-sm text-gray-500 mt-1">Visualisasi prioritas. Sumbu X adalah <b>Urgensi</b>, Sumbu Y adalah <b>Kepentingan</b>, dan ukuran gelembung adalah <b>Durasi</b>.</p></div>
           {matrixData.length === 0 ? (<div className="text-center py-10 text-gray-500">Belum ada data tugas untuk dianalisis.</div>) : (
@@ -423,6 +444,55 @@ function App() {
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500"></div> Task</div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-purple-500"></div> Event</div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-pink-500"></div> Appointment</div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'analytics' && analyticsData && (
+        <div className="space-y-6">
+          {/* AI REVIEW BOX */}
+          <div className="bg-white border border-blue-200 rounded-xl p-6 shadow-sm">
+            <h2 className="text-xl font-bold text-blue-700 mb-3 flex items-center gap-2">
+              <span>🤖</span> Ulasan AI
+            </h2>
+            <div className="text-gray-700">
+              {formatReviewText(analyticsData.ai_review)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* RADAR CHART: WORK LIFE BALANCE */}
+            <div className="bg-white rounded-xl shadow-md p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4 text-center">Keseimbangan Kategori</h3>
+              <div className="w-full h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart cx="50%" cy="50%" outerRadius="70%" data={analyticsData.radar_data}>
+                    <PolarGrid />
+                    <PolarAngleAxis dataKey="subject" />
+                    <PolarRadiusAxis angle={30} domain={[0, 'dataMax']} />
+                    <Radar name="Menit" dataKey="A" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.5} />
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-xs text-center text-gray-500 mt-2">Semakin melebar, semakin banyak waktu yang dihabiskan.</p>
+            </div>
+
+            {/* BAR CHART: DAILY ACTIVITY */}
+            <div className="bg-white rounded-xl shadow-md p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-4 text-center">Total Menit per Hari</h3>
+              <div className="w-full h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={analyticsData.daily_data} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="day" tickFormatter={(val) => val.substring(0, 3)} />
+                    <YAxis />
+                    <Tooltip cursor={{ fill: '#f3f4f6' }} />
+                    <Bar dataKey="minutes" fill="#10b981" radius={[4, 4, 0, 0]} name="Menit" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-xs text-center text-gray-500 mt-2">Aktivitas dihitung berdasarkan estimasi durasi tugas.</p>
+            </div>
           </div>
         </div>
       )}
@@ -478,31 +548,19 @@ function App() {
         </div>
       )}
 
-      {/* MODAL SMART RESCHEDULE */}
       {(isSuggesting || rescheduleData) && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
             <h2 className="text-xl font-bold mb-4 flex items-center gap-2">✨ Smart Reschedule</h2>
-
             {isSuggesting ? (
-              <div className="text-center py-8">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                <p className="text-gray-600">AI sedang mencari dan memilih slot waktu terbaik...</p>
-              </div>
+              <div className="text-center py-8"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-4"></div><p className="text-gray-600">AI sedang mencari dan memilih slot waktu terbaik...</p></div>
             ) : rescheduleData ? (
               <div>
-                <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
-                  <p className="text-sm text-blue-800 font-semibold mb-2">Saran Waktu dari AI:</p>
-                  <p className="text-lg font-bold text-blue-900">{rescheduleData.suggested_time}</p>
-                </div>
-                <div className="bg-gray-50 p-4 rounded-lg border mb-6">
-                  <p className="text-sm text-gray-700 italic">"{rescheduleData.ai_reason}"</p>
-                </div>
+                <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4"><p className="text-sm text-blue-800 font-semibold mb-2">Saran Waktu dari AI:</p><p className="text-lg font-bold text-blue-900">{rescheduleData.suggested_time}</p></div>
+                <div className="bg-gray-50 p-4 rounded-lg border mb-6"><p className="text-sm text-gray-700 italic">"{rescheduleData.ai_reason}"</p></div>
                 <div className="flex justify-end gap-3">
                   <button onClick={() => setRescheduleData(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium">Batal</button>
-                  <button onClick={acceptReschedule} className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium shadow-sm">
-                    Terima & Pindahkan
-                  </button>
+                  <button onClick={acceptReschedule} className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium shadow-sm">Terima & Pindahkan</button>
                 </div>
               </div>
             ) : null}

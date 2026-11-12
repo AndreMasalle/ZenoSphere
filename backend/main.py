@@ -5,11 +5,12 @@ from sqlmodel import Session, SQLModel, select
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
+from collections import defaultdict
 
 from db import engine, get_session
 from models import Task, TaskCreate, UserRule
 from scheduler import generate_schedule, find_empty_slots
-from llm import analyze_task, choose_best_slot
+from llm import analyze_task, choose_best_slot, generate_weekly_review
 from gcal import sync_schedule_to_gcal, delete_gcal_event
 
 
@@ -85,25 +86,16 @@ def smart_add_task(request: TaskSmartAdd, session: Session = Depends(get_session
         existing_schedule_text += f"- {t.title} (dari jam {start_str} sampai {end_str})\n"
 
     new_start_str = request.start_time.strftime("%Y-%m-%d %H:%M")
-
     ai_suggestion = analyze_task(request.title, request.description, rule_text, new_start_str, existing_schedule_text)
 
     db_task = Task(
-        title=request.title,
-        description=request.description,
-        item_type=request.item_type,
-        start_time=request.start_time,
-        task_deadline=request.task_deadline,
-        notify_minutes=request.notify_minutes,
-        estimated_min=request.estimated_min,
-        type=ai_suggestion.get("type", "general"),
-        importance=ai_suggestion.get("importance", 3),
-        reason=ai_suggestion.get("reason", ""),
-        warning=ai_suggestion.get("warning", ""),
-        action=ai_suggestion.get("action", "keep"),
-        preferred_period=ai_suggestion.get("preferred_period", "any"),
-        max_session_min=ai_suggestion.get("max_session_min", 90),
-        break_min=ai_suggestion.get("break_min", 15),
+        title=request.title, description=request.description, item_type=request.item_type,
+        start_time=request.start_time, task_deadline=request.task_deadline,
+        notify_minutes=request.notify_minutes, estimated_min=request.estimated_min,
+        type=ai_suggestion.get("type", "general"), importance=ai_suggestion.get("importance", 3),
+        reason=ai_suggestion.get("reason", ""), warning=ai_suggestion.get("warning", ""),
+        action=ai_suggestion.get("action", "keep"), preferred_period=ai_suggestion.get("preferred_period", "any"),
+        max_session_min=ai_suggestion.get("max_session_min", 90), break_min=ai_suggestion.get("break_min", 15),
         status="todo"
     )
 
@@ -229,8 +221,7 @@ def sync_to_gcal(session: Session = Depends(get_session)):
 
     try:
         for task in tasks:
-            if task.action == "block" or task.warning:
-                continue
+            if task.action == "block" or task.warning: continue
 
             local_tz = ZoneInfo("Asia/Jakarta")
             local_start = task.start_time.astimezone(local_tz) if task.start_time else datetime.now(local_tz)
@@ -244,22 +235,14 @@ def sync_to_gcal(session: Session = Depends(get_session)):
             end_time = end_dt.strftime("%H:%M")
 
             prefix = "[TASK] " if task.item_type == "task" else "[EVENT] " if task.item_type == "event" else "[APPOINTMENT] "
-
             final_reason = task.reason if task.reason else f"Prioritas {task.importance}."
             if task.item_type == "task" and task.task_deadline:
-                dl_local = task.task_deadline.astimezone(local_tz)
-                final_reason += f"\n\nDeadline: {dl_local.strftime('%d %b %Y, %H:%M')}"
+                final_reason += f"\n\nDeadline: {task.task_deadline.astimezone(local_tz).strftime('%d %b %Y, %H:%M')}"
 
             block = {
-                "task_id": task.id,
-                "title": f"{prefix}{task.title}",
-                "reason": final_reason,
-                "start_time": start_time,
-                "end_time": end_time,
-                "end_date_str": end_date_str,
-                "importance": task.importance,
-                "item_type": task.item_type,
-                "notify_minutes": task.notify_minutes
+                "task_id": task.id, "title": f"{prefix}{task.title}", "reason": final_reason,
+                "start_time": start_time, "end_time": end_time, "end_date_str": end_date_str,
+                "importance": task.importance, "item_type": task.item_type, "notify_minutes": task.notify_minutes
             }
 
             c, u, errs = sync_schedule_to_gcal([block], date_str)
@@ -269,7 +252,6 @@ def sync_to_gcal(session: Session = Depends(get_session)):
 
         if all_errors:
             return {"status": "partial_success", "message": "Beberapa jadwal gagal disinkronkan.", "errors": all_errors}
-
         return {"status": "success", "message": f"Berhasil! {total_created} baru, {total_updated} diperbarui."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -308,28 +290,80 @@ def suggest_reschedule(task_id: int, session: Session = Depends(get_session)):
 
     user_rule = session.exec(select(UserRule)).first()
     rule_text = user_rule.rule_text if user_rule else ""
-
     all_tasks = session.exec(select(Task)).all()
 
-    # 1. Cari 3 slot kosong (Logika Python)
     slots = find_empty_slots(all_tasks, task.estimated_min, count=3)
     if not slots:
         return {"status": "error", "message": "Tidak ditemukan slot kosong dalam 7 hari ke depan."}
 
-    # 2. Minta LLM memilih slot terbaik (Penalaran LLM)
     ai_choice = choose_best_slot(task.title, task.estimated_min, slots, rule_text)
-
     chosen_idx = ai_choice.get("chosen_index", 1) - 1
-    if chosen_idx < 0 or chosen_idx >= len(slots):
-        chosen_idx = 0
-
+    if chosen_idx < 0 or chosen_idx >= len(slots): chosen_idx = 0
     best_slot = slots[chosen_idx]
 
     return {
-        "status": "success",
-        "task_id": task.id,  # <-- PERBAIKAN: Kirim task_id asli ke frontend
-        "original_task": task.title,
-        "suggested_time": best_slot["label"],
-        "suggested_time_iso": best_slot["start_time_iso"],
+        "status": "success", "task_id": task.id, "original_task": task.title,
+        "suggested_time": best_slot["label"], "suggested_time_iso": best_slot["start_time_iso"],
         "ai_reason": ai_choice.get("reason", "")
+    }
+
+
+# --- ENDPOINT BARU: REVIEW & ANALYTICS ---
+@app.get("/api/analytics")
+def get_analytics(session: Session = Depends(get_session)):
+    tasks = session.exec(select(Task)).all()
+    user_rule = session.exec(select(UserRule)).first()
+    rule_text = user_rule.rule_text if user_rule else ""
+
+    local_tz = ZoneInfo("Asia/Jakarta")
+    now = datetime.now(local_tz)
+
+    # Filter tugas dalam 7 hari terakhir
+    last_week = now - timedelta(days=7)
+
+    type_stats = defaultdict(int)  # { "akademik": 120, "santai": 300 }
+    daily_stats = defaultdict(int)  # { "Senin": 60, "Selasa": 120 }
+
+    total_done = 0
+    total_pending = 0
+
+    for task in tasks:
+        if not task.start_time:
+            continue
+
+        task_date = task.start_time.astimezone(local_tz)
+        if task_date >= last_week:
+            # Hitung Durasi per Tipe
+            type_stats[task.type.capitalize()] += task.estimated_min
+
+            # Hitung Durasi per Hari (Senin, Selasa, dst)
+            day_name = task_date.strftime("%A")
+            daily_stats[day_name] += task.estimated_min
+
+            if task.status == "done":
+                total_done += 1
+            else:
+                total_pending += 1
+
+    # Format data untuk Radar Chart
+    radar_data = [{"subject": k, "A": v, "fullMark": max(type_stats.values()) if type_stats else 100} for k, v in
+                  type_stats.items()]
+
+    # Format data untuk Bar Chart (Urutan hari)
+    days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    daily_data = [{"day": d, "minutes": daily_stats.get(d, 0)} for d in days_order]
+
+    # Teks untuk LLM
+    stats_text = f"Total tugas selesai: {total_done}. Tugas belum selesai: {total_pending}.\n"
+    stats_text += "Alokasi waktu (menit) per kategori: " + ", ".join([f"{k}: {v}" for k, v in type_stats.items()])
+
+    # Minta ulasan ke AI
+    ai_review = generate_weekly_review(stats_text, rule_text)
+
+    return {
+        "radar_data": radar_data,
+        "daily_data": daily_data,
+        "ai_review": ai_review,
+        "total_done": total_done,
+        "total_pending": total_pending
     }
