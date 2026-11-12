@@ -1,45 +1,108 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import List
 from models import Task
 from priority import calculate_priority_score
 
 
-def generate_schedule(tasks: List[Task], start_hour: int = 8, end_hour: int = 22) -> List[dict]:
-    """
-    Membuat jadwal harian sederhana (greedy algorithm).
-    Mulai dari jam 8 pagi sampai 10 malam.
-    """
-    # 1. Urutkan tugas berdasarkan skor prioritas tertinggi
-    sorted_tasks = sorted(tasks, key=calculate_priority_score, reverse=True)
+def generate_schedule(tasks: List[Task]) -> dict:
+    valid_tasks = []
+    warned_tasks = []
 
-    schedule = []
-    current_time = datetime.now().replace(hour=start_hour, minute=0, second=0, microsecond=0)
-    end_of_day = datetime.now().replace(hour=end_hour, minute=0, second=0, microsecond=0)
+    for t in tasks:
+        if t.status == "done":
+            continue
+        if t.action == "block":
+            warned_tasks.append(t)
+        else:
+            valid_tasks.append(t)
 
-    for task in sorted_tasks:
-        if task.status == "done":
-            continue  # Skip tugas yang sudah selesai
+    now = datetime.now(timezone.utc)
+    local_tz = timezone(timedelta(hours=7))
 
-        # Hitung waktu selesai
-        task_end_time = current_time + timedelta(minutes=task.estimated_min)
+    sorted_valid = sorted(valid_tasks, key=lambda x: x.start_time if x.start_time else now + timedelta(days=999))
+    schedule_blocks = []
 
-        # Jika tugas melebihi jam malam (misal lewat jam 22:00), berhenti.
-        if task_end_time > end_of_day:
-            break
+    # Menyimpan jadwal yang sudah ditempatkan untuk deteksi konflik
+    occupied_slots = []
 
-        # Masukkan ke jadwal
-        schedule.append({
+    for task in sorted_valid:
+        start = task.start_time if task.start_time else now
+        remaining_min = task.estimated_min
+        max_session = task.max_session_min if task.max_session_min else 90
+        break_min = task.break_min if task.break_min else 15
+        session_count = 1
+        current_start = start
+
+        while remaining_min > 0:
+            current_duration = min(remaining_min, max_session)
+            current_end = current_start + timedelta(minutes=current_duration)
+
+            start_loc = current_start.astimezone(local_tz)
+            end_loc = current_end.astimezone(local_tz)
+
+            # DETEKSI BENTROK (Hanya mendeteksi, tidak menggeser)
+            has_conflict = False
+            conflict_with = None
+            for occ_start, occ_end, occ_title in occupied_slots:
+                occ_start_loc = occ_start.astimezone(local_tz)
+                occ_end_loc = occ_end.astimezone(local_tz)
+                if start_loc < occ_end_loc and end_loc > occ_start_loc:
+                    has_conflict = True
+                    conflict_with = occ_title
+                    break
+
+            # Catat jadwal ke occupied_slots
+            occupied_slots.append((current_start, current_end, task.title))
+
+            title_suffix = f" (Sesi {session_count})" if task.estimated_min > max_session else ""
+
+            task_deadline_str = None
+            if task.task_deadline:
+                task_deadline_str = task.task_deadline.astimezone(local_tz).strftime("%d %b %Y, %H:%M")
+
+            schedule_blocks.append({
+                "task_id": task.id,
+                "title": f"{task.title}{title_suffix}",
+                "item_type": task.item_type,
+                "type": task.type,
+                "date_str": start_loc.strftime("%A, %d %b %Y"),
+                "start_time": start_loc.strftime("%H:%M"),
+                "end_time": end_loc.strftime("%H:%M"),
+                "duration_minutes": current_duration,
+                "priority_score": calculate_priority_score(task),
+                "importance": task.importance,
+                "reason": task.reason if task.reason else f"Prioritas {task.importance}.",
+                "warning": task.warning,
+                "has_conflict": has_conflict,
+                "conflict_with": conflict_with,
+                "task_deadline": task_deadline_str,
+                "notify_minutes": task.notify_minutes
+            })
+
+            remaining_min -= current_duration
+            current_start = current_end + timedelta(minutes=break_min)
+            session_count += 1
+
+    warned_blocks = []
+    for task in warned_tasks:
+        start = task.start_time if task.start_time else now
+        start_local = start.astimezone(local_tz)
+        end_local = (start + timedelta(minutes=task.estimated_min)).astimezone(local_tz)
+
+        warned_blocks.append({
             "task_id": task.id,
             "title": task.title,
+            "item_type": task.item_type,
             "type": task.type,
-            "start_time": current_time.strftime("%H:%M"),
-            "end_time": task_end_time.strftime("%H:%M"),
+            "date_str": start_local.strftime("%A, %d %b %Y"),
+            "start_time": start_local.strftime("%H:%M"),
+            "end_time": end_local.strftime("%H:%M"),
             "duration_minutes": task.estimated_min,
-            "priority_score": calculate_priority_score(task),
-            "reason": f"Prioritas {task.importance}, tipe {task.type}. Dijadwalkan lebih awal karena skor prioritas tinggi."
+            "importance": task.importance,
+            "reason": task.reason,
+            "warning": task.warning or "AI mendeteksi ini sebagai distraksi.",
+            "task_deadline": None,
+            "notify_minutes": task.notify_minutes
         })
 
-        # Majukan waktu untuk tugas berikutnya (tambah 15 menit istirahat antar tugas)
-        current_time = task_end_time + timedelta(minutes=15)
-
-    return schedule
+    return {"schedule_blocks": schedule_blocks, "warned_blocks": warned_blocks}

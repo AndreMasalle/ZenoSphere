@@ -2,22 +2,39 @@ from typing import Optional
 from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field
 
-# Model dasar untuk tugas (dipakai untuk validasi input)
+
 class TaskBase(SQLModel):
     title: str
     description: Optional[str] = None
-    type: str = "general"        # contoh: akademik, olahraga, belajar, santai
-    deadline: Optional[datetime] = None
-    estimated_min: int = 60      # estimasi durasi dalam menit
-    importance: int = 3          # prioritas 1-5
-    status: str = "todo"         # todo, done, moved
+    item_type: str = "task"
+    type: str = "general"
 
-# Model tabel yang disimpan di database
+    start_time: datetime
+    task_deadline: Optional[datetime] = None
+    notify_minutes: Optional[int] = 30
+
+    estimated_min: int = 60
+    importance: int = 3
+    status: str = "todo"
+    reason: Optional[str] = None
+    warning: Optional[str] = None
+
+    # KOLOM YANG HILANG:
+    action: Optional[str] = "keep"
+    preferred_period: Optional[str] = "any"
+    max_session_min: Optional[int] = 90
+    break_min: Optional[int] = 15
+
+
 class Task(TaskBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    # PERUBAHAN DI SINI: pakai datetime.now(timezone.utc)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-# Model khusus untuk input dari user (tanpa id dan created_at)
+
 class TaskCreate(TaskBase):
     pass
+
+
+class UserRule(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    rule_text: str = Field(default="Prioritaskan akademik, olahraga, dan belajar. Tetap jaga work-life balance.")
