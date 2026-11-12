@@ -125,6 +125,43 @@ def smart_add_task(request: TaskSmartAdd, session: Session = Depends(get_session
     return db_task
 
 
+# --- ENDPOINT UNTUK EDIT TUGAS ---
+class TaskUpdate(BaseModel):
+    title: str
+    description: str = ""
+    item_type: str
+    start_time: datetime
+    task_deadline: datetime | None = None
+    notify_minutes: int | None = 30
+    estimated_min: int = 60
+
+
+@app.put("/api/tasks/{task_id}", response_model=Task)
+def update_task(task_id: int, req: TaskUpdate, session: Session = Depends(get_session)):
+    task = session.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Tugas tidak ditemukan")
+
+    task.title = req.title
+    task.description = req.description
+    task.item_type = req.item_type
+    task.start_time = req.start_time
+    task.task_deadline = req.task_deadline
+    task.notify_minutes = req.notify_minutes
+    task.estimated_min = req.estimated_min
+
+    local_tz = ZoneInfo("Asia/Jakarta")
+    if task.start_time.tzinfo is None:
+        task.start_time = task.start_time.replace(tzinfo=local_tz).astimezone(timezone.utc)
+    if task.task_deadline and task.task_deadline.tzinfo is None:
+        task.task_deadline = task.task_deadline.replace(tzinfo=local_tz).astimezone(timezone.utc)
+
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    return task
+
+
 @app.get("/api/tasks", response_model=list[Task])
 def read_tasks(session: Session = Depends(get_session)):
     return session.exec(select(Task)).all()
@@ -169,18 +206,16 @@ def delete_task(task_id: int, session: Session = Depends(get_session)):
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Tugas tidak ditemukan")
-
-    # Hapus dari database terlebih dahulu
     session.delete(task)
     session.commit()
 
-    # Coba hapus dari GCal, tapi jangan sampai mengganggu proses hapus di DB
     try:
         delete_gcal_event(task_id)
     except Exception as e:
         print(f"Peringatan: Gagal hapus di GCal, tapi DB sudah bersih. Error: {e}")
 
     return {"status": "success", "message": "Tugas berhasil dihapus"}
+
 
 @app.get("/api/schedule")
 def get_upcoming_schedule(session: Session = Depends(get_session)):

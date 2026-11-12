@@ -19,10 +19,7 @@ def generate_schedule(tasks: List[Task]) -> dict:
     now = datetime.now(timezone.utc)
     local_tz = timezone(timedelta(hours=7))
 
-    # PENGURUTAN MULTI-LEVEL (Netral):
-    # 1. Skor Prioritas (Tertinggi ke Terendah)
-    # 2. Waktu Mulai (Paling awal ke paling akhir)
-    # 3. ID (Inputan yang lebih dulu)
+    # Pengurutan: Skor Prioritas -> Waktu Mulai -> ID
     sorted_valid = sorted(
         valid_tasks,
         key=lambda x: (
@@ -67,17 +64,21 @@ def generate_schedule(tasks: List[Task]) -> dict:
             title_suffix = f" (Sesi {session_count})" if task.estimated_min > max_session else ""
 
             task_deadline_str = None
+            raw_task_deadline = ""
             if task.task_deadline:
                 task_deadline_str = task.task_deadline.astimezone(local_tz).strftime("%d %b %Y, %H:%M")
+                raw_task_deadline = task.task_deadline.astimezone(local_tz).strftime("%Y-%m-%dT%H:%M")
 
             schedule_blocks.append({
                 "task_id": task.id,
                 "title": f"{task.title}{title_suffix}",
+                "description": task.description,
                 "item_type": task.item_type,
                 "type": task.type,
                 "date_str": start_loc.strftime("%A, %d %b %Y"),
                 "start_time": start_loc.strftime("%H:%M"),
                 "end_time": end_loc.strftime("%H:%M"),
+                "raw_start_time": start_loc.strftime("%Y-%m-%dT%H:%M"),
                 "duration_minutes": current_duration,
                 "priority_score": calculate_priority_score(task),
                 "importance": task.importance,
@@ -86,6 +87,7 @@ def generate_schedule(tasks: List[Task]) -> dict:
                 "has_conflict": has_conflict,
                 "conflict_with": conflict_with,
                 "task_deadline": task_deadline_str,
+                "raw_task_deadline": raw_task_deadline,
                 "notify_minutes": task.notify_minutes
             })
 
@@ -99,19 +101,26 @@ def generate_schedule(tasks: List[Task]) -> dict:
         start_local = start.astimezone(local_tz)
         end_local = (start + timedelta(minutes=task.estimated_min)).astimezone(local_tz)
 
+        raw_task_deadline = ""
+        if task.task_deadline:
+            raw_task_deadline = task.task_deadline.astimezone(local_tz).strftime("%Y-%m-%dT%H:%M")
+
         warned_blocks.append({
             "task_id": task.id,
             "title": task.title,
+            "description": task.description,
             "item_type": task.item_type,
             "type": task.type,
             "date_str": start_local.strftime("%A, %d %b %Y"),
             "start_time": start_local.strftime("%H:%M"),
             "end_time": end_local.strftime("%H:%M"),
+            "raw_start_time": start_local.strftime("%Y-%m-%dT%H:%M"),
             "duration_minutes": task.estimated_min,
             "importance": task.importance,
             "reason": task.reason,
             "warning": task.warning or "AI mendeteksi ini sebagai distraksi.",
             "task_deadline": None,
+            "raw_task_deadline": raw_task_deadline,
             "notify_minutes": task.notify_minutes
         })
 

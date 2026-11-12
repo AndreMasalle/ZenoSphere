@@ -4,11 +4,13 @@ import './App.css'
 interface ScheduleBlock {
   task_id: number;
   title: string;
+  description?: string;
   item_type: string;
   type: string;
   date_str: string;
   start_time: string;
   end_time: string;
+  raw_start_time: string;
   duration_minutes: number;
   priority_score: number;
   importance: number;
@@ -17,6 +19,7 @@ interface ScheduleBlock {
   has_conflict?: boolean;
   conflict_with?: string;
   task_deadline?: string;
+  raw_task_deadline?: string;
   notify_minutes?: number;
 }
 
@@ -26,6 +29,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // State Form Tambah
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [itemType, setItemType] = useState<'event' | 'task' | 'appointment'>('task');
@@ -36,13 +40,22 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
+  // State Modal Edit
+  const [editingTaskId, setEditingTaskId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editItemType, setEditItemType] = useState<'event' | 'task' | 'appointment'>('task');
+  const [editStartTime, setEditStartTime] = useState('');
+  const [editTaskDeadline, setEditTaskDeadline] = useState('');
+  const [editNotifyMinutes, setEditNotifyMinutes] = useState(30);
+  const [editDuration, setEditDuration] = useState(60);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [editError, setEditError] = useState('');
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [rulesText, setRulesText] = useState('');
-
-  const [rescheduleTaskId, setRescheduleTaskId] = useState<number | null>(null);
-  const [newStartTime, setNewStartTime] = useState('');
 
   const fetchSchedule = async () => {
     try {
@@ -135,6 +148,58 @@ function App() {
     }
   };
 
+  // Fungsi Membuka Modal Edit
+  const openEditModal = (task: ScheduleBlock) => {
+    setEditingTaskId(task.task_id);
+    setEditTitle(task.title.replace(/ \(Sesi \d+\)$/, '')); // Hapus suffix sesi jika ada
+    setEditDescription(task.description || '');
+    setEditItemType(task.item_type as any);
+    setEditStartTime(task.raw_start_time || '');
+    setEditTaskDeadline(task.raw_task_deadline || '');
+    setEditNotifyMinutes(task.notify_minutes || 30);
+    setEditDuration(task.duration_minutes);
+    setEditError('');
+  };
+
+  // Fungsi Menyimpan Hasil Edit
+  const handleUpdateTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTaskId || !editTitle.trim() || !editStartTime) return;
+
+    setIsUpdating(true);
+    setEditError('');
+    try {
+      const payload: any = {
+        title: editTitle,
+        description: editDescription,
+        item_type: editItemType,
+        start_time: editStartTime,
+        estimated_min: Number(editDuration)
+      };
+
+      if (editItemType === 'task') payload.task_deadline = editTaskDeadline || null;
+      if (editItemType === 'appointment') payload.notify_minutes = Number(editNotifyMinutes);
+
+      const response = await fetch(`http://localhost:8000/api/tasks/${editingTaskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Gagal mengubah jadwal');
+      }
+
+      setEditingTaskId(null);
+      await fetchSchedule();
+    } catch (err: any) {
+      setEditError(err.message);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const handleToggleDone = async (taskId: number) => {
     await fetch(`http://localhost:8000/api/tasks/${taskId}/status`, { method: 'PATCH' });
     await fetchSchedule();
@@ -148,27 +213,6 @@ function App() {
         const errData = await response.json();
         throw new Error(errData.detail || 'Gagal menghapus tugas dari server');
       }
-      await fetchSchedule();
-    } catch (err: any) {
-      alert(`Error: ${err.message}`);
-    }
-  };
-
-  const handleReschedule = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!rescheduleTaskId || !newStartTime) return;
-
-    try {
-      const response = await fetch(`http://localhost:8000/api/tasks/${rescheduleTaskId}/reschedule`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ new_start_time: newStartTime }),
-      });
-
-      if (!response.ok) throw new Error('Gagal mengubah jadwal');
-
-      setRescheduleTaskId(null);
-      setNewStartTime('');
       await fetchSchedule();
     } catch (err: any) {
       alert(`Error: ${err.message}`);
@@ -298,7 +342,6 @@ function App() {
               <h3 className="text-lg font-bold text-gray-700 mb-3 border-b pb-2">{date}</h3>
               <div className="space-y-4">
                 {tasks.map((block) => (
-                  // PERBAIKAN REACT KEY: Gunakan gabungan task_id dan start_time
                   <div key={`${block.task_id}-${block.start_time}`} className={`relative flex flex-col md:flex-row md:items-center p-4 pt-10 md:pt-4 border rounded-lg hover:shadow-sm gap-4 ${block.has_conflict ? 'bg-red-50 border-red-400' : 'bg-gray-50 border-gray-200'}`}>
                     <div className="absolute top-3 right-3 md:top-4 md:right-4">
                       <span className={`text-xs font-bold px-3 py-1 rounded-full ${block.importance >= 4 ? 'bg-red-100 text-red-700' : block.importance === 3 ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>
@@ -331,7 +374,7 @@ function App() {
                         <div className="bg-red-100 text-red-700 p-3 rounded border border-red-300 text-sm font-semibold flex justify-between items-center">
                           <span>⚠️ Bentrok dengan: {block.conflict_with}</span>
                           <button
-                            onClick={() => setRescheduleTaskId(block.task_id)}
+                            onClick={() => openEditModal(block)}
                             className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs shrink-0 ml-2"
                           >
                             Ubah Jadwal
@@ -341,6 +384,7 @@ function App() {
 
                       <div className="text-sm text-gray-600 italic bg-white p-2 rounded border">"{block.reason}"</div>
                       <div className="flex gap-2 justify-end">
+                        <button onClick={() => openEditModal(block)} className="bg-yellow-100 text-yellow-700 hover:bg-yellow-200 px-4 py-1.5 rounded-lg text-sm font-semibold">✏️ Edit</button>
                         <button onClick={() => handleToggleDone(block.task_id)} className="bg-green-100 text-green-700 hover:bg-green-200 px-4 py-1.5 rounded-lg text-sm font-semibold">✓ Selesai</button>
                         <button onClick={() => handleDeleteTask(block.task_id)} className="bg-red-100 text-red-700 hover:bg-red-200 px-4 py-1.5 rounded-lg text-sm font-semibold">✕ Hapus</button>
                       </div>
@@ -392,21 +436,69 @@ function App() {
         </div>
       )}
 
-      {rescheduleTaskId && (
+      {/* MODAL EDIT JADWAL */}
+      {editingTaskId && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
-            <h2 className="text-xl font-bold mb-4">Ubah Waktu Jadwal</h2>
-            <form onSubmit={handleReschedule}>
-              <input
-                type="datetime-local"
-                value={newStartTime}
-                onChange={(e) => setNewStartTime(e.target.value)}
-                required
-                className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4 focus:ring-2 focus:ring-blue-500"
-              />
-              <div className="flex justify-end gap-3">
-                <button type="button" onClick={() => setRescheduleTaskId(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Batal</button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Simpan Perubahan</button>
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+            <h2 className="text-xl font-bold mb-4">✏️ Edit Jadwal</h2>
+            {editError && <div className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm">{editError}</div>}
+
+            <form onSubmit={handleUpdateTask} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Judul</label>
+                <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} required className="w-full border border-gray-300 rounded-lg px-4 py-2" />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Deskripsi</label>
+                <input type="text" value={editDescription} onChange={(e) => setEditDescription(e.target.value)} className="w-full border border-gray-300 rounded-lg px-4 py-2" />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Tipe</label>
+                <select value={editItemType} onChange={(e) => setEditItemType(e.target.value as any)} className="w-full border border-gray-300 rounded-lg px-4 py-2">
+                  <option value="event">Event</option>
+                  <option value="task">Task</option>
+                  <option value="appointment">Appointment</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Waktu Mulai</label>
+                <input type="datetime-local" value={editStartTime} onChange={(e) => setEditStartTime(e.target.value)} required className="w-full border border-gray-300 rounded-lg px-4 py-2" />
+              </div>
+
+              {editItemType === 'task' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
+                  <input type="datetime-local" value={editTaskDeadline} onChange={(e) => setEditTaskDeadline(e.target.value)} required className="w-full border border-gray-300 rounded-lg px-4 py-2" />
+                </div>
+              )}
+
+              {editItemType === 'appointment' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Notifikasi (Menit)</label>
+                  <select value={editNotifyMinutes} onChange={(e) => setEditNotifyMinutes(Number(e.target.value))} className="w-full border border-gray-300 rounded-lg px-4 py-2">
+                    <option value={10}>10 Menit</option>
+                    <option value={30}>30 Menit</option>
+                    <option value={60}>1 Jam</option>
+                    <option value={1440}>1 Hari</option>
+                  </select>
+                </div>
+              )}
+
+              {editItemType !== 'task' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Durasi (Menit)</label>
+                  <input type="number" value={editDuration} onChange={(e) => setEditDuration(Number(e.target.value))} required min="15" className="w-full border border-gray-300 rounded-lg px-4 py-2" />
+                </div>
+              )}
+
+              <div className="md:col-span-2 flex justify-end gap-3 mt-4">
+                <button type="button" onClick={() => setEditingTaskId(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Batal</button>
+                <button type="submit" disabled={isUpdating} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-blue-300">
+                  {isUpdating ? 'Menyimpan...' : 'Simpan Perubahan'}
+                </button>
               </div>
             </form>
           </div>
