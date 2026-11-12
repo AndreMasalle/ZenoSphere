@@ -71,6 +71,8 @@ class TaskSmartAdd(BaseModel):
     task_deadline: datetime | None = None
     notify_minutes: int | None = 30
     estimated_min: int = 60
+    is_recurring: bool = False
+    recurrence_type: str | None = None
 
 
 @app.post("/api/tasks/smart-add", response_model=Task)
@@ -88,7 +90,7 @@ def smart_add_task(request: TaskSmartAdd, session: Session = Depends(get_session
     new_start_str = request.start_time.strftime("%Y-%m-%d %H:%M")
     ai_suggestion = analyze_task(request.title, request.description, rule_text, new_start_str, existing_schedule_text)
 
-    db_task = Task(
+    base_task = Task(
         title=request.title, description=request.description, item_type=request.item_type,
         start_time=request.start_time, task_deadline=request.task_deadline,
         notify_minutes=request.notify_minutes, estimated_min=request.estimated_min,
@@ -96,19 +98,39 @@ def smart_add_task(request: TaskSmartAdd, session: Session = Depends(get_session
         reason=ai_suggestion.get("reason", ""), warning=ai_suggestion.get("warning", ""),
         action=ai_suggestion.get("action", "keep"), preferred_period=ai_suggestion.get("preferred_period", "any"),
         max_session_min=ai_suggestion.get("max_session_min", 90), break_min=ai_suggestion.get("break_min", 15),
-        status="todo"
+        status="todo", is_recurring=request.is_recurring, recurrence_type=request.recurrence_type
     )
 
     local_tz = ZoneInfo("Asia/Jakarta")
-    if db_task.start_time and db_task.start_time.tzinfo is None:
-        db_task.start_time = db_task.start_time.replace(tzinfo=local_tz).astimezone(timezone.utc)
-    if db_task.task_deadline and db_task.task_deadline.tzinfo is None:
-        db_task.task_deadline = db_task.task_deadline.replace(tzinfo=local_tz).astimezone(timezone.utc)
+    if base_task.start_time and base_task.start_time.tzinfo is None:
+        base_task.start_time = base_task.start_time.replace(tzinfo=local_tz).astimezone(timezone.utc)
+    if base_task.task_deadline and base_task.task_deadline.tzinfo is None:
+        base_task.task_deadline = base_task.task_deadline.replace(tzinfo=local_tz).astimezone(timezone.utc)
 
-    session.add(db_task)
+    session.add(base_task)
+
+    # LOGIKA RECURRING TASKS (Generate 30 hari / 4 minggu ke depan)
+    if request.is_recurring and request.recurrence_type in ['daily', 'weekly']:
+        iterations = 29 if request.recurrence_type == 'daily' else 3
+        step = timedelta(days=1) if request.recurrence_type == 'daily' else timedelta(weeks=1)
+
+        for i in range(1, iterations + 1):
+            clone = Task(
+                title=base_task.title, description=base_task.description, item_type=base_task.item_type,
+                start_time=base_task.start_time + (step * i),
+                task_deadline=(base_task.task_deadline + (step * i)) if base_task.task_deadline else None,
+                notify_minutes=base_task.notify_minutes, estimated_min=base_task.estimated_min,
+                type=base_task.type, importance=base_task.importance, reason=base_task.reason,
+                warning=base_task.warning,
+                action=base_task.action, preferred_period=base_task.preferred_period,
+                max_session_min=base_task.max_session_min, break_min=base_task.break_min,
+                status="todo", is_recurring=True, recurrence_type=request.recurrence_type
+            )
+            session.add(clone)
+
     session.commit()
-    session.refresh(db_task)
-    return db_task
+    session.refresh(base_task)
+    return base_task
 
 
 class TaskUpdate(BaseModel):
@@ -235,6 +257,9 @@ def sync_to_gcal(session: Session = Depends(get_session)):
             end_time = end_dt.strftime("%H:%M")
 
             prefix = "[TASK] " if task.item_type == "task" else "[EVENT] " if task.item_type == "event" else "[APPOINTMENT] "
+            if task.is_recurring:
+                prefix = f"[{task.recurrence_type.upper()}] " + prefix
+
             final_reason = task.reason if task.reason else f"Prioritas {task.importance}."
             if task.item_type == "task" and task.task_deadline:
                 final_reason += f"\n\nDeadline: {task.task_deadline.astimezone(local_tz).strftime('%d %b %Y, %H:%M')}"
@@ -308,7 +333,6 @@ def suggest_reschedule(task_id: int, session: Session = Depends(get_session)):
     }
 
 
-# --- ENDPOINT BARU: REVIEW & ANALYTICS ---
 @app.get("/api/analytics")
 def get_analytics(session: Session = Depends(get_session)):
     tasks = session.exec(select(Task)).all()
@@ -317,53 +341,36 @@ def get_analytics(session: Session = Depends(get_session)):
 
     local_tz = ZoneInfo("Asia/Jakarta")
     now = datetime.now(local_tz)
-
-    # Filter tugas dalam 7 hari terakhir
     last_week = now - timedelta(days=7)
 
-    type_stats = defaultdict(int)  # { "akademik": 120, "santai": 300 }
-    daily_stats = defaultdict(int)  # { "Senin": 60, "Selasa": 120 }
-
+    type_stats = defaultdict(int)
+    daily_stats = defaultdict(int)
     total_done = 0
     total_pending = 0
 
     for task in tasks:
-        if not task.start_time:
-            continue
-
+        if not task.start_time: continue
         task_date = task.start_time.astimezone(local_tz)
         if task_date >= last_week:
-            # Hitung Durasi per Tipe
             type_stats[task.type.capitalize()] += task.estimated_min
-
-            # Hitung Durasi per Hari (Senin, Selasa, dst)
             day_name = task_date.strftime("%A")
             daily_stats[day_name] += task.estimated_min
-
             if task.status == "done":
                 total_done += 1
             else:
                 total_pending += 1
 
-    # Format data untuk Radar Chart
     radar_data = [{"subject": k, "A": v, "fullMark": max(type_stats.values()) if type_stats else 100} for k, v in
                   type_stats.items()]
-
-    # Format data untuk Bar Chart (Urutan hari)
     days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     daily_data = [{"day": d, "minutes": daily_stats.get(d, 0)} for d in days_order]
 
-    # Teks untuk LLM
     stats_text = f"Total tugas selesai: {total_done}. Tugas belum selesai: {total_pending}.\n"
     stats_text += "Alokasi waktu (menit) per kategori: " + ", ".join([f"{k}: {v}" for k, v in type_stats.items()])
 
-    # Minta ulasan ke AI
     ai_review = generate_weekly_review(stats_text, rule_text)
 
     return {
-        "radar_data": radar_data,
-        "daily_data": daily_data,
-        "ai_review": ai_review,
-        "total_done": total_done,
-        "total_pending": total_pending
+        "radar_data": radar_data, "daily_data": daily_data, "ai_review": ai_review,
+        "total_done": total_done, "total_pending": total_pending
     }

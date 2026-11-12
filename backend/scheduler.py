@@ -14,11 +14,8 @@ def get_item_weight(item_type: str) -> int:
 
 
 def find_empty_slots(tasks: List[Task], duration_min: int, count: int = 3) -> List[dict]:
-    """Mencari slot waktu kosong mulai dari besok hingga 7 hari ke depan (jam 08:00 - 22:00)."""
     local_tz = timezone(timedelta(hours=7))
     now = datetime.now(local_tz)
-
-    # Ambil jadwal aktif
     active_tasks = [t for t in tasks if t.status == "todo" and t.action != "block"]
 
     occupied_slots = []
@@ -29,7 +26,7 @@ def find_empty_slots(tasks: List[Task], duration_min: int, count: int = 3) -> Li
             occupied_slots.append((start, end))
 
     suggested_slots = []
-    current_day = now.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)  # Mulai besok
+    current_day = now.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
     days_searched = 0
 
     while len(suggested_slots) < count and days_searched < 7:
@@ -39,13 +36,13 @@ def find_empty_slots(tasks: List[Task], duration_min: int, count: int = 3) -> Li
             current_end = current_time + timedelta(minutes=duration_min)
 
             if current_end.hour > 22 or (current_end.day != current_time.day):
-                break  # Lewati jika melewati jam 22:00
+                break
 
             has_conflict = False
             for occ_start, occ_end in occupied_slots:
                 if current_time < occ_end and current_end > occ_start:
                     has_conflict = True
-                    current_time = occ_end + timedelta(minutes=15)  # Geser setelah jadwal bentrok
+                    current_time = occ_end + timedelta(minutes=15)
                     break
 
             if not has_conflict:
@@ -54,7 +51,7 @@ def find_empty_slots(tasks: List[Task], duration_min: int, count: int = 3) -> Li
                     "label": current_time.strftime("%A, %d %b - %H:%M"),
                     "raw_time": current_time
                 })
-                current_time += timedelta(minutes=30)  # Cari slot berikutnya setengah jam kemudian
+                current_time += timedelta(minutes=30)
                 if len(suggested_slots) >= count:
                     break
             else:
@@ -142,7 +139,9 @@ def generate_schedule(tasks: List[Task]) -> dict:
                 "conflict_with": conflict_with,
                 "task_deadline": task_deadline_str,
                 "raw_task_deadline": raw_task_deadline,
-                "notify_minutes": task.notify_minutes
+                "notify_minutes": task.notify_minutes,
+                "is_recurring": task.is_recurring,
+                "recurrence_type": task.recurrence_type
             })
 
             remaining_min -= current_duration
@@ -175,7 +174,9 @@ def generate_schedule(tasks: List[Task]) -> dict:
             "warning": task.warning or "AI mendeteksi ini sebagai distraksi.",
             "task_deadline": None,
             "raw_task_deadline": raw_task_deadline,
-            "notify_minutes": task.notify_minutes
+            "notify_minutes": task.notify_minutes,
+            "is_recurring": task.is_recurring,
+            "recurrence_type": task.recurrence_type
         })
 
     return {"schedule_blocks": schedule_blocks, "warned_blocks": warned_blocks}

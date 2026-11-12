@@ -6,12 +6,12 @@ from sqlmodel import SQLModel, Field
 class TaskBase(SQLModel):
     title: str
     description: Optional[str] = None
-    item_type: str = "task"
-    type: str = "general"
+    item_type: str = "task"  # event, task, appointment
+    type: str = "general"  # kategori AI
 
-    start_time: datetime
-    task_deadline: Optional[datetime] = None
-    notify_minutes: Optional[int] = 30
+    start_time: datetime  # Waktu mulai / waktu pengerjaan
+    task_deadline: Optional[datetime] = None  # Khusus Task: Batas waktu
+    notify_minutes: Optional[int] = 30  # Khusus Appointment: Notifikasi (menit)
 
     estimated_min: int = 60
     importance: int = 3
@@ -19,11 +19,15 @@ class TaskBase(SQLModel):
     reason: Optional[str] = None
     warning: Optional[str] = None
 
-    # KOLOM YANG HILANG:
+    # Kolom AI
     action: Optional[str] = "keep"
     preferred_period: Optional[str] = "any"
     max_session_min: Optional[int] = 90
     break_min: Optional[int] = 15
+
+    # Kolom Baru: Tugas Berulang
+    is_recurring: bool = False
+    recurrence_type: Optional[str] = None  # "daily", "weekly"
 
 
 class Task(TaskBase, table=True):

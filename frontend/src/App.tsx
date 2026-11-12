@@ -27,6 +27,8 @@ interface ScheduleBlock {
   task_deadline?: string;
   raw_task_deadline?: string;
   notify_minutes?: number;
+  is_recurring?: boolean;
+  recurrence_type?: string;
 }
 
 interface MatrixTask {
@@ -57,6 +59,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Form State
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [itemType, setItemType] = useState<'event' | 'task' | 'appointment'>('task');
@@ -64,6 +67,11 @@ function App() {
   const [taskDeadline, setTaskDeadline] = useState('');
   const [notifyMinutes, setNotifyMinutes] = useState(30);
   const [duration, setDuration] = useState(60);
+
+  // Recurring State
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurrenceType, setRecurrenceType] = useState<'daily' | 'weekly'>('daily');
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
@@ -159,7 +167,8 @@ function App() {
     setFormError('');
     try {
       const payload: any = {
-        title, description, item_type: itemType, start_time: startTime, estimated_min: Number(duration)
+        title, description, item_type: itemType, start_time: startTime, estimated_min: Number(duration),
+        is_recurring: isRecurring, recurrence_type: isRecurring ? recurrenceType : null
       };
       if (itemType === 'task') payload.task_deadline = taskDeadline || null;
       if (itemType === 'appointment') payload.notify_minutes = Number(notifyMinutes);
@@ -171,7 +180,8 @@ function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Gagal memproses AI');
-      setTitle(''); setDescription(''); setStartTime(''); setTaskDeadline(''); setDuration(60);
+
+      setTitle(''); setDescription(''); setStartTime(''); setTaskDeadline(''); setDuration(60); setIsRecurring(false);
       await fetchData();
     } catch (err: any) {
       setFormError(err.message);
@@ -291,15 +301,12 @@ function App() {
     return '#3b82f6';
   };
 
-  // --- FUNGSI UNTUK MEMFORMAT TEKS MARKDOWN AI MENJADI PARAGRAF & BOLD ---
   const formatReviewText = (text: string) => {
     return text.split('\n').filter(p => p.trim() !== '').map((paragraph, i) => {
-      // Memisahkan teks berdasarkan tanda ** untuk mencari teks yang di-bold
       const parts = paragraph.split('**');
       return (
         <p key={i} className="mb-4 last:mb-0 leading-relaxed text-gray-700">
           {parts.map((part, index) =>
-            // Jika index ganjil, berarti itu adalah teks di antara ** dan ** (jadi di-bold)
             index % 2 === 1 ? <strong key={index} className="text-gray-900 font-semibold">{part}</strong> : <span key={index}>{part}</span>
           )}
         </p>
@@ -356,6 +363,21 @@ function App() {
           {itemType === 'task' && (<div><label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label><input type="datetime-local" value={taskDeadline} onChange={(e) => setTaskDeadline(e.target.value)} required className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500" /></div>)}
           {itemType === 'appointment' && (<div><label className="block text-sm font-medium text-gray-700 mb-1">Notifikasi Sebelum (Menit)</label><select value={notifyMinutes} onChange={(e) => setNotifyMinutes(Number(e.target.value))} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500"><option value={10}>10 Menit</option><option value={30}>30 Menit</option><option value={60}>1 Jam</option><option value={1440}>1 Hari</option></select></div>)}
           {itemType !== 'task' && (<div><label className="block text-sm font-medium text-gray-700 mb-1">Durasi (Menit)</label><input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} required min="15" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500" /></div>)}
+
+          {/* UI RECURRING TASKS */}
+          <div className="md:col-span-2 flex items-center gap-3 mt-2 bg-gray-50 p-3 rounded-lg border border-gray-200">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={isRecurring} onChange={(e) => setIsRecurring(e.target.checked)} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500" />
+              <span className="text-sm font-medium text-gray-700">Jadikan Tugas Berulang</span>
+            </label>
+            {isRecurring && (
+              <select value={recurrenceType} onChange={(e) => setRecurrenceType(e.target.value as any)} className="border border-gray-300 rounded-lg px-3 py-1 text-sm focus:ring-2 focus:ring-blue-500">
+                <option value="daily">Harian (30 hari ke depan)</option>
+                <option value="weekly">Mingguan (4 minggu ke depan)</option>
+              </select>
+            )}
+          </div>
+
           <div className="md:col-span-2 flex justify-end mt-2"><button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:bg-blue-300">{isSubmitting ? 'AI Menganalisis...' : 'Simpan'}</button></div>
         </form>
       </div>
@@ -384,7 +406,14 @@ function App() {
                 <div className="space-y-4">
                   {tasks.map((block) => (
                     <div key={`${block.task_id}-${block.start_time}`} className={`relative flex flex-col md:flex-row md:items-center p-4 pt-10 md:pt-4 border rounded-lg hover:shadow-sm gap-4 ${block.has_conflict ? 'bg-red-50 border-red-400' : 'bg-gray-50 border-gray-200'}`}>
-                      <div className="absolute top-3 right-3 md:top-4 md:right-4"><span className={`text-xs font-bold px-3 py-1 rounded-full ${block.importance >= 4 ? 'bg-red-100 text-red-700' : block.importance === 3 ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>Priority: {block.importance}</span></div>
+                      <div className="absolute top-3 right-3 md:top-4 md:right-4 flex gap-2">
+                        {block.is_recurring && (
+                          <span className="text-xs font-bold px-2 py-1 rounded-full bg-gray-200 text-gray-600 border border-gray-300 flex items-center gap-1">
+                            🔄 {block.recurrence_type === 'daily' ? 'Harian' : 'Mingguan'}
+                          </span>
+                        )}
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full ${block.importance >= 4 ? 'bg-red-100 text-red-700' : block.importance === 3 ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>Priority: {block.importance}</span>
+                      </div>
                       <div className="md:w-1/6 shrink-0"><span className="text-lg font-bold text-blue-700">{block.start_time}</span><span className="text-gray-500 mx-1">-</span><span className="text-gray-600">{block.end_time}</span><div className="text-xs text-gray-400 mt-1">{block.duration_minutes} mnt</div></div>
                       <div className="md:w-2/6 md:border-l-2 md:border-blue-300 md:pl-4">
                         <div className="flex flex-wrap gap-2 mb-1"><span className={`inline-block text-xs px-2 py-1 rounded font-bold uppercase tracking-wider ${getTypeBadge(block.item_type)}`}>{block.item_type}</span><span className="inline-block bg-gray-200 text-gray-700 text-xs px-2 py-1 rounded">{block.type}</span></div>
@@ -450,7 +479,6 @@ function App() {
 
       {activeTab === 'analytics' && analyticsData && (
         <div className="space-y-6">
-          {/* AI REVIEW BOX */}
           <div className="bg-white border border-blue-200 rounded-xl p-6 shadow-sm">
             <h2 className="text-xl font-bold text-blue-700 mb-3 flex items-center gap-2">
               <span>🤖</span> Ulasan AI
@@ -461,7 +489,6 @@ function App() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* RADAR CHART: WORK LIFE BALANCE */}
             <div className="bg-white rounded-xl shadow-md p-6">
               <h3 className="text-lg font-bold text-gray-800 mb-4 text-center">Keseimbangan Kategori</h3>
               <div className="w-full h-80">
@@ -477,7 +504,6 @@ function App() {
               <p className="text-xs text-center text-gray-500 mt-2">Semakin melebar, semakin banyak waktu yang dihabiskan.</p>
             </div>
 
-            {/* BAR CHART: DAILY ACTIVITY */}
             <div className="bg-white rounded-xl shadow-md p-6">
               <h3 className="text-lg font-bold text-gray-800 mb-4 text-center">Total Menit per Hari</h3>
               <div className="w-full h-80">
