@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo
 
 from db import engine, get_session
 from models import Task, TaskCreate, UserRule
-from scheduler import generate_schedule
-from llm import analyze_task
+from scheduler import generate_schedule, find_empty_slots
+from llm import analyze_task, choose_best_slot
 from gcal import sync_schedule_to_gcal, delete_gcal_event
 
 
@@ -86,13 +86,7 @@ def smart_add_task(request: TaskSmartAdd, session: Session = Depends(get_session
 
     new_start_str = request.start_time.strftime("%Y-%m-%d %H:%M")
 
-    ai_suggestion = analyze_task(
-        request.title,
-        request.description,
-        rule_text,
-        new_start_str,
-        existing_schedule_text
-    )
+    ai_suggestion = analyze_task(request.title, request.description, rule_text, new_start_str, existing_schedule_text)
 
     db_task = Task(
         title=request.title,
@@ -125,7 +119,6 @@ def smart_add_task(request: TaskSmartAdd, session: Session = Depends(get_session
     return db_task
 
 
-# --- ENDPOINT UNTUK EDIT TUGAS ---
 class TaskUpdate(BaseModel):
     title: str
     description: str = ""
@@ -280,3 +273,63 @@ def sync_to_gcal(session: Session = Depends(get_session)):
         return {"status": "success", "message": f"Berhasil! {total_created} baru, {total_updated} diperbarui."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/matrix")
+def get_eisenhower_matrix(session: Session = Depends(get_session)):
+    tasks = session.exec(select(Task).where(Task.status == "todo")).all()
+    now = datetime.now(timezone.utc)
+    matrix_data = []
+    for task in tasks:
+        target_time = task.task_deadline if task.task_deadline else task.start_time
+        is_urgent = False
+        days_left = 999
+        if target_time:
+            if target_time.tzinfo is None: target_time = target_time.replace(tzinfo=timezone.utc)
+            days_left = (target_time - now).total_seconds() / 86400
+            if days_left <= 2: is_urgent = True
+        is_important = task.importance >= 4
+        quadrant = "Lakukan Segera (Q1)" if (is_important and is_urgent) else "Jadwalkan (Q2)" if (
+                    is_important and not is_urgent) else "Delegasikan (Q3)" if (
+                    not is_important and is_urgent) else "Abaikan (Q4)"
+        matrix_data.append({
+            "id": task.id, "title": task.title, "x_urgency": 1 if is_urgent else 2,
+            "y_importance": task.importance, "quadrant": quadrant, "item_type": task.item_type,
+            "days_left": round(days_left, 1), "duration": task.estimated_min
+        })
+    return {"matrix": matrix_data}
+
+
+@app.post("/api/tasks/{task_id}/suggest-reschedule")
+def suggest_reschedule(task_id: int, session: Session = Depends(get_session)):
+    task = session.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Tugas tidak ditemukan")
+
+    user_rule = session.exec(select(UserRule)).first()
+    rule_text = user_rule.rule_text if user_rule else ""
+
+    all_tasks = session.exec(select(Task)).all()
+
+    # 1. Cari 3 slot kosong (Logika Python)
+    slots = find_empty_slots(all_tasks, task.estimated_min, count=3)
+    if not slots:
+        return {"status": "error", "message": "Tidak ditemukan slot kosong dalam 7 hari ke depan."}
+
+    # 2. Minta LLM memilih slot terbaik (Penalaran LLM)
+    ai_choice = choose_best_slot(task.title, task.estimated_min, slots, rule_text)
+
+    chosen_idx = ai_choice.get("chosen_index", 1) - 1
+    if chosen_idx < 0 or chosen_idx >= len(slots):
+        chosen_idx = 0
+
+    best_slot = slots[chosen_idx]
+
+    return {
+        "status": "success",
+        "task_id": task.id,  # <-- PERBAIKAN: Kirim task_id asli ke frontend
+        "original_task": task.title,
+        "suggested_time": best_slot["label"],
+        "suggested_time_iso": best_slot["start_time_iso"],
+        "ai_reason": ai_choice.get("reason", "")
+    }

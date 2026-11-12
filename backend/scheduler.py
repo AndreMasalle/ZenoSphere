@@ -4,13 +4,74 @@ from models import Task
 from priority import calculate_priority_score
 
 
+def get_item_weight(item_type: str) -> int:
+    if item_type == "appointment":
+        return 3
+    elif item_type == "task":
+        return 2
+    else:
+        return 1
+
+
+def find_empty_slots(tasks: List[Task], duration_min: int, count: int = 3) -> List[dict]:
+    """Mencari slot waktu kosong mulai dari besok hingga 7 hari ke depan (jam 08:00 - 22:00)."""
+    local_tz = timezone(timedelta(hours=7))
+    now = datetime.now(local_tz)
+
+    # Ambil jadwal aktif
+    active_tasks = [t for t in tasks if t.status == "todo" and t.action != "block"]
+
+    occupied_slots = []
+    for t in active_tasks:
+        if t.start_time:
+            start = t.start_time.astimezone(local_tz)
+            end = start + timedelta(minutes=t.estimated_min)
+            occupied_slots.append((start, end))
+
+    suggested_slots = []
+    current_day = now.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)  # Mulai besok
+    days_searched = 0
+
+    while len(suggested_slots) < count and days_searched < 7:
+        current_time = current_day
+
+        while current_time.hour < 22:
+            current_end = current_time + timedelta(minutes=duration_min)
+
+            if current_end.hour > 22 or (current_end.day != current_time.day):
+                break  # Lewati jika melewati jam 22:00
+
+            has_conflict = False
+            for occ_start, occ_end in occupied_slots:
+                if current_time < occ_end and current_end > occ_start:
+                    has_conflict = True
+                    current_time = occ_end + timedelta(minutes=15)  # Geser setelah jadwal bentrok
+                    break
+
+            if not has_conflict:
+                suggested_slots.append({
+                    "start_time_iso": current_time.isoformat(),
+                    "label": current_time.strftime("%A, %d %b - %H:%M"),
+                    "raw_time": current_time
+                })
+                current_time += timedelta(minutes=30)  # Cari slot berikutnya setengah jam kemudian
+                if len(suggested_slots) >= count:
+                    break
+            else:
+                continue
+
+        current_day += timedelta(days=1)
+        days_searched += 1
+
+    return suggested_slots
+
+
 def generate_schedule(tasks: List[Task]) -> dict:
     valid_tasks = []
     warned_tasks = []
 
     for t in tasks:
-        if t.status == "done":
-            continue
+        if t.status == "done": continue
         if t.action == "block":
             warned_tasks.append(t)
         else:
@@ -19,14 +80,9 @@ def generate_schedule(tasks: List[Task]) -> dict:
     now = datetime.now(timezone.utc)
     local_tz = timezone(timedelta(hours=7))
 
-    # Pengurutan: Skor Prioritas -> Waktu Mulai -> ID
     sorted_valid = sorted(
         valid_tasks,
-        key=lambda x: (
-            -calculate_priority_score(x),
-            x.start_time if x.start_time else now + timedelta(days=999),
-            x.id
-        )
+        key=lambda x: (-calculate_priority_score(x), x.start_time if x.start_time else now + timedelta(days=999), x.id)
     )
 
     schedule_blocks = []
@@ -47,13 +103,11 @@ def generate_schedule(tasks: List[Task]) -> dict:
             start_loc = current_start.astimezone(local_tz)
             end_loc = current_end.astimezone(local_tz)
 
-            # DETEKSI BENTROK
             has_conflict = False
             conflict_with = None
             for occ_start, occ_end, occ_title in occupied_slots:
                 occ_start_loc = occ_start.astimezone(local_tz)
                 occ_end_loc = occ_end.astimezone(local_tz)
-
                 if start_loc < occ_end_loc and end_loc > occ_start_loc:
                     has_conflict = True
                     conflict_with = occ_title

@@ -31,10 +31,9 @@ def analyze_task(title: str, description: str, user_context: str, new_start_time
     2. "importance": 1-5 berdasarkan konteks.
     3. "reason": Alasan prioritas berdasarkan konteks.
     4. "warning": Penjelasan singkat mengapa ini bentrok/distraksi. Jika aman, isi "".
-    5. "action": Pilih satu aksi dengan aturan ketat berikut:
+    5. "action": Pilih satu aksi:
        - "block": Jika tugas baru ini murni distraksi (main game 20 jam).
-       - "reschedule": JIKA TUGAS BARU INI BENTROK JAMNYA DENGAN "JADWAL YANG SUDAH ADA" di atas, DAN tugas ini penting/tidak boleh dihapus (misal: Kencan, Appointment). Sistem akan menggeser jadwal ini ke waktu lain.
-       - "keep": Jika jadwal aman (tidak bentrok), atau ini tugas utama.
+       - "keep": Jika tugas ini valid (termasuk appointment penting).
     6. "preferred_period": "morning", "afternoon", "evening", atau "any".
     7. "max_session_min": Default 90.
     8. "break_min": Default 15.
@@ -68,3 +67,43 @@ def analyze_task(title: str, description: str, user_context: str, new_start_time
         print(f"Error LLM: {e}")
         return {"type": "general", "importance": 3, "reason": "", "warning": "", "action": "keep",
                 "preferred_period": "any", "max_session_min": 90, "break_min": 15}
+
+
+def choose_best_slot(task_title: str, task_duration: int, slots: list, user_context: str) -> dict:
+    """Meminta LLM untuk memilih slot terbaik dari daftar yang diberikan."""
+    slots_text = "\n".join([f"{i + 1}. {slot['label']}" for i, slot in enumerate(slots)])
+
+    prompt = f"""
+    Pengguna ingin memindahkan jadwal "{task_title}" (durasi {task_duration} menit) yang sebelumnya bentrok.
+
+    KONTEKS PENGGUNA:
+    "{user_context}"
+
+    Berikut adalah 3 slot waktu kosong terdekat yang tersedia:
+    {slots_text}
+
+    Tugas: Pilih SATU slot terbaik dari daftar di atas dan berikan alasan logis mengapa slot tersebut dipilih berdasarkan konteks pengguna.
+
+    Kembalikan HANYA JSON:
+    {{
+        "chosen_index": 1, (isi dengan angka 1, 2, atau 3 sesuai pilihan)
+        "reason": "Alasan mengapa memilih slot ini..."
+    }}
+    """
+
+    messages_data = [
+        {"role": "system", "content": "You are an intelligent scheduling assistant designed to output JSON."},
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=cast(list[ChatCompletionMessageParam], messages_data),
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Error LLM (choose slot): {e}")
+        return {"chosen_index": 1, "reason": "Gagal mendapatkan saran dari AI. Silakan pilih secara manual."}
